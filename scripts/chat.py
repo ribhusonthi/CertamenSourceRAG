@@ -20,11 +20,15 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from rag_config import CHAT_MODEL, EMBED_DIM, EMBED_MODEL, INDEX_DB, genai_client  # noqa: E402
+from rag_config import CHAT_MODEL, EMBED_DIM, EMBED_MODEL, INDEX_DB, genai_client, retry  # noqa: E402
 
 CANDIDATES = 40   # hits taken from each of keyword and vector search
 TOP_K = 12        # passages given to the model
 RRF_K = 60
+# Query rewriting and embedding normally take 1–3 s; give up on a stuck call fast.
+QUICK_TIMEOUT_MS = 15_000
+# Writing a cited answer can take ~30 s; the site waits 90 s in all, so cap it below that.
+ANSWER_TIMEOUT_MS = 55_000
 RARE_TERM_DOCS = 150        # a query word in at most this many passages gets its own search
 RARE_TERM_STEM_BELOW = 5    # fewer exact hits than this: also match by stem ("contubern*")
 RARE_TERM_WEIGHT = 2        # an exact rare-word hit counts double when the lists are merged
@@ -184,9 +188,10 @@ class Index:
     def vector_search(self, queries, k=CANDIDATES):
         """One ranked list per query (embedded in a single call)."""
         from google.genai import types
-        res = self.client.models.embed_content(
+        res = retry(lambda: self.client.models.embed_content(
             model=EMBED_MODEL, contents=queries,
-            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY", output_dimensionality=EMBED_DIM))
+            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY", output_dimensionality=EMBED_DIM,
+                                            http_options=types.HttpOptions(timeout=QUICK_TIMEOUT_MS))))
         out = []
         for e in res.embeddings:
             q = np.asarray(e.values, dtype=np.float32)
@@ -283,11 +288,12 @@ class Chat:
         from google.genai import types
         queries = self.search_queries(message)
         passages = self.index.search(queries)
-        res = self.index.client.models.generate_content(
+        res = retry(lambda: self.index.client.models.generate_content(
             model=CHAT_MODEL, contents=self.contents(message, passages),
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM + CITED_FORMAT, temperature=0.2,
-                response_mime_type="application/json", response_schema=CITED_SCHEMA))
+                response_mime_type="application/json", response_schema=CITED_SCHEMA,
+                http_options=types.HttpOptions(timeout=ANSWER_TIMEOUT_MS))))
         # Number citations in order of first use; the same sentence cited twice keeps its number.
         citations, numbers, answer = [], {}, ""
         for seg in json.loads(res.text).get("segments", []):
@@ -318,9 +324,14 @@ class Chat:
         """The message itself plus up to 3 rewritten queries with alternate name spellings."""
         from google.genai import types
         convo = "\n".join(f"User: {u}\nAssistant: {a[:600]}" for u, a in self.history[-3:]) or "(none)"
-        res = self.index.client.models.generate_content(
-            model=CHAT_MODEL, contents=QUERIES.format(history=convo, message=message),
-            config=types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_level="low")))
+        try:
+            res = self.index.client.models.generate_content(
+                model=CHAT_MODEL, contents=QUERIES.format(history=convo, message=message),
+                config=types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_level="low"),
+                                                   http_options=types.HttpOptions(timeout=QUICK_TIMEOUT_MS)))
+        except Exception as e:  # the rewrite only improves recall; search with the question as asked
+            print(f"query rewrite failed, using the question as is: {e}", file=sys.stderr, flush=True)
+            return [message]
         extra = [q.strip(" -*\"") for q in (res.text or "").splitlines() if q.strip()][:3]
         # A follow-up like "who was his father?" is useless as a query on its own.
         return ([message] if not self.history else []) + extra or [message]

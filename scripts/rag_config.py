@@ -12,6 +12,25 @@ EMBED_DIM = 768
 CHAT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 
 
+GEMINI_TIMEOUT_MS = 40_000
+
+
 def genai_client():
+    # The SDK has no timeout by default, so a pooled connection that went stale
+    # while a Cloud Run instance sat idle could hang a request until the
+    # service's own limit. With a timeout it fails fast and retry() can redo it.
     from google import genai
-    return genai.Client(vertexai=True, project=GCP_PROJECT, location=GCP_LOCATION)
+    from google.genai import types
+    return genai.Client(vertexai=True, project=GCP_PROJECT, location=GCP_LOCATION,
+                        http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS))
+
+
+def retry(call, attempts=2):
+    """Run a Gemini call, once more if it times out or its connection drops."""
+    import httpx
+    for attempt in range(attempts):
+        try:
+            return call()
+        except (httpx.TimeoutException, httpx.TransportError):
+            if attempt == attempts - 1:
+                raise
