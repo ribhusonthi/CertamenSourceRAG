@@ -1,0 +1,10 @@
+# Copyrighted source material and everything derived from it. These never go to
+# GitHub; the search index reaches Cloud Run only inside the built image (see
+# Dockerfile / .gcloudignore).
+Textbooks/
+extracted/
+index/
+
+.DS_Store
+__pycache__/
+*.pyc

@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Certamen Sources</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<style>
+:root {
+  --bg: #faf9f7; --surface: #ffffff; --ink: #1d1b22; --muted: #6b6775; --line: #e7e4ec;
+  --accent: #6d4ae0; --accent-soft: #efeafd; --mark: #fff1b8; --warn: #9a5b00; --warn-soft: #fdf3e2;
+  --shadow: 0 12px 32px rgba(30, 20, 60, .14), 0 2px 6px rgba(30, 20, 60, .08);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141318; --surface: #1d1b23; --ink: #ecebf0; --muted: #a29fae; --line: #2e2b37;
+    --accent: #a48bff; --accent-soft: #2a2442; --mark: #5a4b12; --warn: #f0b860; --warn-soft: #3a2c14;
+    --shadow: 0 12px 32px rgba(0, 0, 0, .5);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 Inter, system-ui, sans-serif; display: flex; flex-direction: column; }
+
+header { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--surface); }
+header h1 { font: 600 17px/1.2 "Source Serif 4", Georgia, serif; margin: 0; }
+header .sub { color: var(--muted); font-size: 13px; }
+header button { margin-left: auto; }
+button { font: inherit; cursor: pointer; }
+.ghost { background: none; border: 1px solid var(--line); color: var(--ink); border-radius: 8px; padding: 6px 12px; font-size: 13px; }
+.ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+main { flex: 1; overflow-y: auto; }
+#thread { max-width: 760px; margin: 0 auto; padding: 28px 20px 40px; }
+
+.empty { text-align: center; padding-top: 10vh; color: var(--muted); }
+.empty h2 { font: 600 26px/1.25 "Source Serif 4", Georgia, serif; color: var(--ink); margin: 0 0 8px; }
+.examples { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 22px; }
+.examples button { background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px; color: var(--ink); font-size: 13px; }
+.examples button:hover { border-color: var(--accent); color: var(--accent); }
+
+.turn { margin-bottom: 30px; }
+.q { background: var(--accent-soft); border-radius: 12px; padding: 10px 14px; margin-left: auto; width: fit-content; max-width: 85%; white-space: pre-wrap; }
+.a { margin-top: 16px; font: 17px/1.65 "Source Serif 4", Georgia, serif; }
+.a p { margin: 0 0 12px; }
+.a ul, .a ol { margin: 0 0 12px; padding-left: 22px; }
+.a li { margin-bottom: 6px; }
+.a h1, .a h2, .a h3 { font-size: 17px; margin: 18px 0 8px; }
+.a strong { font-weight: 600; }
+.status { color: var(--muted); font-style: italic; display: flex; align-items: center; gap: 10px; }
+.dots span { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-right: 3px; animation: pulse 1.2s infinite ease-in-out; }
+.dots span:nth-child(2) { animation-delay: .15s; } .dots span:nth-child(3) { animation-delay: .3s; }
+@keyframes pulse { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+.error { color: #c0392b; font: 14px/1.5 Inter, sans-serif; }
+
+/* LaTeX-style citation markers: [1, 2] */
+sup.cites { font: 500 11px/1 Inter, sans-serif; color: var(--muted); margin-left: 1px; white-space: nowrap; }
+button.cite { background: none; border: 0; padding: 0 1px; color: var(--accent); font: inherit; border-radius: 3px; }
+button.cite:hover, button.cite.active { background: var(--accent); color: #fff; }
+
+.refs { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; font-size: 13px; }
+.refs-title { font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-size: 11px; margin-bottom: 6px; }
+.ref { display: grid; grid-template-columns: 30px 1fr; gap: 4px; padding: 5px 6px; border-radius: 6px; cursor: pointer; }
+.ref:hover, .ref.active { background: var(--accent-soft); }
+.ref .n { color: var(--accent); font-weight: 600; }
+.ref .src { font-weight: 500; }
+.ref .quote { color: var(--muted); font-family: "Source Serif 4", Georgia, serif; font-size: 14px; }
+
+/* Citation card */
+#card { position: fixed; z-index: 10; width: min(440px, calc(100vw - 32px)); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 14px 16px; display: none; }
+#card.open { display: block; }
+#card .book { font-weight: 600; font-size: 14px; padding-right: 22px; }
+#card .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+#card .meta b { color: var(--accent); font-weight: 600; }
+#card blockquote { margin: 12px 0 0; padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 8px 8px 0; font: 16px/1.55 "Source Serif 4", Georgia, serif; }
+#card .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+#card .badge { font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); }
+#card .passage { margin-top: 10px; max-height: 260px; overflow-y: auto; font: 14px/1.6 "Source Serif 4", Georgia, serif; color: var(--muted); white-space: pre-wrap; border-top: 1px solid var(--line); padding-top: 10px; }
+#card .passage mark { background: var(--mark); color: var(--ink); padding: 0 1px; border-radius: 2px; }
+#card .actions { display: flex; gap: 8px; margin-top: 12px; }
+#card .actions a, #card .actions button { font-size: 12px; text-decoration: none; }
+#card .close { position: absolute; top: 8px; right: 10px; background: none; border: 0; color: var(--muted); font-size: 18px; line-height: 1; }
+
+footer { border-top: 1px solid var(--line); background: var(--surface); padding: 12px 20px 16px; }
+form { max-width: 760px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; }
+textarea { flex: 1; resize: none; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; max-height: 200px; outline: none; }
+textarea:focus { border-color: var(--accent); }
+form button { background: var(--accent); color: #fff; border: 0; border-radius: 10px; padding: 10px 18px; font-weight: 500; }
+form button:disabled { opacity: .5; cursor: default; }
+.hint { max-width: 760px; margin: 6px auto 0; color: var(--muted); font-size: 12px; }
+@media (max-width: 600px) { header .sub { display: none; } .a { font-size: 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Certamen Sources</h1>
+  <span class="sub">13 textbooks · answers cite the page they came from</span>
+  <button class="ghost" id="reset" type="button">New chat</button>
+</header>
+<main id="scroller"><div id="thread"></div></main>
+<footer>
+  <form id="form">
+    <textarea id="input" rows="1" placeholder="Ask a question or paste a tossup to verify…" autofocus></textarea>
+    <button id="send" type="submit">Ask</button>
+  </form>
+  <div class="hint">Enter to send · Shift+Enter for a new line · click a citation number to see its source sentence</div>
+</footer>
+<div id="card" role="dialog" aria-label="Citation"></div>
+
+<script>
+const EXAMPLES = [
+  "Who founded Mycenae?",
+  "How did Achilles die?",
+  "What did the lex Hortensia do?",
+  "Verify: Q: This emperor, born at Lanuvium in 161, fought as a gladiator in the arena. A: Commodus",
+];
+const thread = document.getElementById("thread");
+const scroller = document.getElementById("scroller");
+const input = document.getElementById("input");
+const send = document.getElementById("send");
+const card = document.getElementById("card");
+let history = [];   // [question, answer] pairs sent back for follow-ups
+let busy = false;
+
+const esc = s => s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function showEmpty() {
+  thread.innerHTML = `<div class="empty"><h2>Check a fact against the sourcebooks</h2>
+    <div>Every claim is cited to a textbook page. Click a citation to read the sentence it came from.</div>
+    <div class="examples">${EXAMPLES.map(e => `<button type="button">${esc(e)}</button>`).join("")}</div></div>`;
+  thread.querySelectorAll(".examples button").forEach(b => b.onclick = () => ask(b.textContent));
+}
+
+// "[1][2]" -> one LaTeX-style group "[1, 2]" of clickable numbers.
+function renderAnswer(md, cites) {
+  const known = new Set(cites.map(c => String(c.n)));
+  const withMarkers = md.replace(/(?:\[\d+\])+/g, group => {
+    const ns = [...group.matchAll(/\d+/g)].map(m => m[0]).filter(n => known.has(n));
+    if (!ns.length) return "";
+    return `<sup class="cites">[${ns.map(n => `<button type="button" class="cite" data-n="${n}">${n}</button>`).join(", ")}]</sup>`;
+  });
+  return DOMPurify.sanitize(marked.parse(withMarkers));
+}
+
+function quoteOf(c) {
+  return c.quote_end > c.quote_start ? c.text.slice(c.quote_start, c.quote_end) : c.text.slice(0, 240) + "…";
+}
+
+function renderRefs(cites) {
+  if (!cites.length) return "";
+  const rows = [...cites].sort((a, b) => a.n - b.n).map(c => `
+    <div class="ref" data-n="${c.n}">
+      <span class="n">[${c.n}]</span>
+      <span><span class="src">${esc(c.cite)}, ${esc(c.page_ref)}</span><br>
+      <span class="quote">“${esc(quoteOf(c))}”</span></span>
+    </div>`).join("");
+  return `<div class="refs"><div class="refs-title">References</div>${rows}</div>`;
+}
+
+function addTurn(question) {
+  if (!history.length) thread.innerHTML = "";
+  const turn = document.createElement("div");
+  turn.className = "turn";
+  turn.innerHTML = `<div class="q">${esc(question)}</div>
+    <div class="a"><div class="status"><span class="dots"><span></span><span></span><span></span></span><span class="msg">Searching the textbooks…</span></div></div>`;
+  thread.appendChild(turn);
+  scroller.scrollTop = scroller.scrollHeight;
+  return turn;
+}
+
+async function ask(question) {
+  question = question.trim();
+  if (!question || busy) return;
+  busy = true; send.disabled = true; input.value = ""; autosize(); closeCard();
+  const turn = addTurn(question);
+  const msg = turn.querySelector(".msg");
+  const timer = setTimeout(() => msg && (msg.textContent = "Reading the passages…"), 3500);
+  try {
+    const res = await fetch("/api/ask", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: question, history }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    const a = turn.querySelector(".a");
+    a.innerHTML = renderAnswer(data.answer, data.citations) + renderRefs(data.citations);
+    turn.cites = Object.fromEntries(data.citations.map(c => [String(c.n), c]));
+    history.push([question, data.answer]);
+  } catch (err) {
+    turn.querySelector(".a").innerHTML = `<div class="error">Something went wrong: ${esc(err.message)}</div>`;
+  } finally {
+    clearTimeout(timer);
+    busy = false; send.disabled = false; input.focus();
+  }
+}
+
+function highlighted(c) {
+  const s = c.quote_start, e = c.quote_end;
+  if (e <= s) return esc(c.text);
+  return esc(c.text.slice(0, s)) + "<mark>" + esc(c.text.slice(s, e)) + "</mark>" + esc(c.text.slice(e));
+}
+
+function openCard(c, anchor) {
+  document.querySelectorAll(".cite.active, .ref.active").forEach(el => el.classList.remove("active"));
+  anchor.classList.add("active");
+  const [author, ...titleParts] = c.cite.split(", ");
+  const badges = [
+    c.alternate ? `<span class="badge">Passage mentions alternate versions</span>` : "",
+    c.exact ? "" : `<span class="badge">Closest matching sentence (not an exact quote)</span>`,
+  ].join("");
+  card.innerHTML = `
+    <button class="close" type="button" aria-label="Close">×</button>
+    <div class="book">${esc(titleParts.join(", ") || c.cite)}</div>
+    <div class="meta">${esc(author)} · <b>${esc(c.page_ref)}</b>${c.page ? ` · pdf page ${c.pdf_page}` : ""}</div>
+    <blockquote>${esc(quoteOf(c))}</blockquote>
+    ${badges ? `<div class="badges">${badges}</div>` : ""}
+    <div class="actions">
+      <button class="ghost" type="button" data-act="passage">Show full passage</button>
+      <a class="ghost" href="/pdf/${encodeURIComponent(c.source_id)}#page=${c.pdf_page}" target="_blank" rel="noopener">Open PDF page ↗</a>
+    </div>
+    <div class="passage" hidden>${highlighted(c)}</div>`;
+  card.querySelector(".close").onclick = closeCard;
+  card.querySelector('[data-act="passage"]').onclick = ev => {
+    const p = card.querySelector(".passage");
+    p.hidden = !p.hidden;
+    ev.target.textContent = p.hidden ? "Show full passage" : "Hide full passage";
+    if (!p.hidden) p.querySelector("mark")?.scrollIntoView({ block: "center" });
+    place(anchor);
+  };
+  card.classList.add("open");
+  place(anchor);
+}
+
+function place(anchor) {
+  const r = anchor.getBoundingClientRect(), w = card.offsetWidth, h = card.offsetHeight;
+  let left = Math.min(Math.max(16, r.left + r.width / 2 - w / 2), window.innerWidth - w - 16);
+  let top = r.bottom + 8;
+  if (top + h > window.innerHeight - 16) top = Math.max(16, r.top - h - 8);
+  card.style.left = left + "px";
+  card.style.top = top + "px";
+}
+
+function closeCard() {
+  card.classList.remove("open");
+  document.querySelectorAll(".cite.active, .ref.active").forEach(el => el.classList.remove("active"));
+}
+
+thread.addEventListener("click", ev => {
+  const el = ev.target.closest("button.cite, .ref");
+  if (!el) return;
+  ev.stopPropagation();
+  const c = el.closest(".turn").cites?.[el.dataset.n];
+  if (!c) return;
+  if (el.classList.contains("active")) return closeCard();
+  openCard(c, el);
+});
+document.addEventListener("click", ev => { if (!card.contains(ev.target)) closeCard(); });
+document.addEventListener("keydown", ev => { if (ev.key === "Escape") closeCard(); });
+scroller.addEventListener("scroll", closeCard);
+
+function autosize() { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 200) + "px"; }
+input.addEventListener("input", autosize);
+input.addEventListener("keydown", ev => {
+  if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); ask(input.value); }
+});
+document.getElementById("form").addEventListener("submit", ev => { ev.preventDefault(); ask(input.value); });
+document.getElementById("reset").onclick = () => { history = []; closeCard(); showEmpty(); input.focus(); };
+showEmpty();
+</script>
+</body>
+</html>

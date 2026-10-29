@@ -1,0 +1,12 @@
+# What `gcloud run deploy --source .` uploads to Cloud Build: the code plus the
+# search index only. The PDFs, extracted text and embedding cache stay local.
+# (Without this file gcloud would fall back to .gitignore and leave out index/.)
+.git
+.gitignore
+.claude/
+Textbooks/
+extracted/
+index/embed-cache.db
+web/
+**/__pycache__/
+.DS_Store
