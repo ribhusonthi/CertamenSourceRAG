@@ -50,7 +50,7 @@ def public_citation(c):
     return {
         "n": c["n"], "cite": c["cite"], "page_ref": c["page_ref"],
         "quote": text[start:end], "before": before, "after": after,
-        "exact": c["exact"], "alternate": c["alternate"],
+        "exact": c["exact"], "alternate": c["alternate"], "tier": c.get("tier"),
     }
 
 

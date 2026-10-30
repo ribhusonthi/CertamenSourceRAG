@@ -20,10 +20,11 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from rag_config import CHAT_MODEL, EMBED_DIM, EMBED_MODEL, INDEX_DB, genai_client, retry  # noqa: E402
+from rag_config import (  # noqa: E402
+    CHAT_MODEL, EMBED_DIM, EMBED_MODEL, INDEX_DB, TIER_NAMES, TIER_WEIGHTS, genai_client, retry, source_tier)
 
 CANDIDATES = 40   # hits taken from each of keyword and vector search
-TOP_K = 12        # passages given to the model
+TOP_K = 15        # passages given to the model
 RRF_K = 60
 # Query rewriting and embedding normally take 1–3 s; give up on a stuck call fast.
 QUICK_TIMEOUT_MS = 15_000
@@ -60,8 +61,9 @@ provided with each question, which come from standard certamen textbooks.
 
 Rules:
 - Cite every factual claim (the citation format is given at the end).
-- Use only what the passages say. If they do not answer the question, say so plainly (for \
-example "The sources here don't cover this.") and stop. Never fill gaps from your own knowledge.
+- Use only what the passages say. Never fill gaps from your own knowledge. If they answer only \
+part of the question, give that part and say plainly what they don't cover. Say "The sources \
+here don't cover this." only when nothing in the passages bears on the question.
 - If the user gives a claim, a question with its answer, or a certamen tossup, start with \
 exactly one verdict: Supported, Contradicted, Partly supported, or Not found in the sources. \
 Then explain with citations, checking each clue separately when there are several. A clue \
@@ -69,6 +71,15 @@ that no passage mentions is "not found", not contradicted.
 - If sources disagree (different dates, parentage, numbers), say so and cite each.
 - Quote a short phrase from a passage when the exact wording decides the matter.
 - Be concise.
+
+Source priority. Each passage is labeled as a primary, secondary or semi-official source:
+- Base each claim on primary sources when they cover it. Use secondary sources only for what \
+the primary ones don't cover, and semi-official sources only when neither does.
+- When sources disagree, follow the highest-ranked one and mention the disagreement, saying which \
+source says what.
+- List citations to primary sources first.
+- These labels are for you; don't write "primary source" or "semi-official source" in the \
+answer. Name the book instead when it matters.
 
 Myths often exist in several versions, and certamen questions usually follow the standard one:
 - For every mythological fact, check how the passage frames it. A passage header may list \
@@ -116,8 +127,11 @@ CITED_SCHEMA = {
 }
 
 QUERIES = """You write search queries for a library of Classics textbooks (Roman history, Greek \
-and Roman mythology, Latin literature, Roman daily life). Write up to 3 short search queries \
-that would find the passages answering the user's latest message. Resolve pronouns and \
+and Roman mythology, Latin literature, Roman daily life). Write up to 4 short search queries \
+that would find the passages answering the user's latest message. If it has several clues (as \
+certamen tossups do), write one query per clue, each naming that clue's key people, places or \
+things, so every clue gets searched. If the message gives an answer to check, make one query \
+the plain core fact with that answer (e.g. "Paris killed Achilles"). Resolve pronouns and \
 references from the conversation. Use the key names and terms, and add alternate spellings or \
 the Greek/Latin forms of names where they exist (e.g. Heracles / Hercules, Mycenae / Mycene, \
 Odysseus / Ulysses). One query per line, no numbering, nothing else.
@@ -140,6 +154,9 @@ class Index:
         rows = self.db.execute("SELECT id, embedding FROM chunks ORDER BY id").fetchall()
         self.ids = np.array([r[0] for r in rows])
         self.vecs = np.stack([np.frombuffer(r[1], dtype=np.float32) for r in rows])
+        # Search weight per chunk, from its book's tier (primary books first).
+        self.tier_weight = {cid: TIER_WEIGHTS[source_tier(sid)]
+                            for cid, sid in self.db.execute("SELECT id, source_id FROM chunks")}
         self.client = genai_client()
 
     @property
@@ -201,20 +218,45 @@ class Index:
         return out
 
     def search(self, queries, k=TOP_K):
-        fused = {}
-        keyword_lists = [wr for q in queries for wr in self.keyword_search(q)]
-        for weight, ranked in keyword_lists + [(1, r) for r in self.vector_search(queries)]:
-            for rank, cid in enumerate(ranked):
-                fused[cid] = fused.get(cid, 0) + weight / (RRF_K + rank + 1)
-        best = sorted(fused, key=fused.get, reverse=True)[:k]
+        """The k passages for these queries: each query's keyword and vector results are
+        fused into one ranking, then the rankings take turns filling the slots. Taking turns
+        matters for multi-clue tossups: with one combined ranking, the clue with the most
+        matching text crowded out the others (Memnon's dew lost to the Heliades' amber)."""
+        rankings = []
+        for query, vector_ranked in zip(queries, self.vector_search(queries)):
+            # General matches are scaled by the book's tier, so primary books come
+            # first. Exact hits on a rare word (or its stem) are not: if a primary
+            # book has that word it already leads that list, and if only a secondary
+            # one does, that passage is what "look at the other books" means.
+            general, exact = {}, {}
+            for weight, ranked in self.keyword_search(query) + [(1, vector_ranked)]:
+                target = exact if weight == RARE_TERM_WEIGHT else general
+                for rank, cid in enumerate(ranked):
+                    target[cid] = target.get(cid, 0) + weight / (RRF_K + rank + 1)
+            fused = {cid: general.get(cid, 0) * self.tier_weight[cid] + exact.get(cid, 0)
+                     for cid in general.keys() | exact.keys()}
+            rankings.append(sorted(fused, key=fused.get, reverse=True))
+        best = []
+        for depth in range(max(map(len, rankings), default=0)):
+            for ranking in rankings:
+                if depth < len(ranking) and ranking[depth] not in best:
+                    best.append(ranking[depth])
+            if len(best) >= k:
+                break
+        best = best[:k]
         cols = "id, source_id, cite, page, pdf_page, text"
         rows = {r[0]: r for r in self.db.execute(
             f"SELECT {cols} FROM chunks WHERE id IN ({','.join('?' * len(best))})", best)}
-        return [dict(zip(cols.split(", "), rows[i])) for i in best]
+        passages = [dict(zip(cols.split(", "), rows[i])) for i in best]
+        for p in passages:
+            p["tier"] = TIER_NAMES[source_tier(p["source_id"])]
+        return passages
 
 
 def page_ref(p):
-    return f"p. {p['page']}" if p["page"] else f"unnumbered page (pdf page {p['pdf_page']})"
+    if p["page"]:
+        return f"{'pp' if '–' in p['page'] else 'p'}. {p['page']}"
+    return f"unnumbered page (pdf page {p['pdf_page']})"
 
 
 def phrases(pattern, text, limit=4):
@@ -237,7 +279,7 @@ def version_flags(text):
 
 def format_passages(passages):
     return "\n\n".join(
-        "\n".join([f"[{n}] {p['cite']}, {page_ref(p)}", *version_flags(p["text"]), p["text"]])
+        "\n".join([f"[{n}] {p['cite']}, {page_ref(p)} ({p['tier']} source)", *version_flags(p["text"]), p["text"]])
         for n, p in enumerate(passages, 1))
 
 
@@ -311,10 +353,13 @@ class Chat:
                         "n": numbers[key], "cite": p["cite"], "source_id": p["source_id"], "page": p["page"],
                         "pdf_page": p["pdf_page"], "page_ref": page_ref(p), "text": p["text"],
                         "quote_start": start, "quote_end": end, "exact": exact,
-                        "alternate": bool(VARIANT_WORDS.search(p["text"]))})
+                        "alternate": bool(VARIANT_WORDS.search(p["text"])), "tier": p["tier"]})
                 if numbers[key] not in marks:
                     marks.append(numbers[key])
             # Markers go after the claim, before any trailing whitespace/newlines.
+            # The model sometimes leaves out the space between one segment and the next.
+            if answer and not answer[-1].isspace() and text[:1].isalnum():
+                answer += " "
             body = text.rstrip()
             answer += body + "".join(f"[{n}]" for n in marks) + text[len(body):]
         self.history.append((message, answer))
@@ -327,12 +372,12 @@ class Chat:
         try:
             res = self.index.client.models.generate_content(
                 model=CHAT_MODEL, contents=QUERIES.format(history=convo, message=message),
-                config=types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_level="low"),
+                config=types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_level="low"), temperature=0,
                                                    http_options=types.HttpOptions(timeout=QUICK_TIMEOUT_MS)))
         except Exception as e:  # the rewrite only improves recall; search with the question as asked
             print(f"query rewrite failed, using the question as is: {e}", file=sys.stderr, flush=True)
             return [message]
-        extra = [q.strip(" -*\"") for q in (res.text or "").splitlines() if q.strip()][:3]
+        extra = [q.strip(" -*\"") for q in (res.text or "").splitlines() if q.strip()][:4]
         # A follow-up like "who was his father?" is useless as a query on its own.
         return ([message] if not self.history else []) + extra or [message]
 

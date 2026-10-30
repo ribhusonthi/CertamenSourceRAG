@@ -32,8 +32,15 @@ TEXTBOOKS = ROOT / "Textbooks"
 OUT = ROOT / "extracted"
 
 # match: a substring of the PDF filename in Textbooks/.
-# pages: "labels" = embedded PDF page labels, "header" = numbers printed on the page.
-# ocr:   "missing" = only pages without a text layer, "all" = ignore the text layer.
+# pages: "labels" = embedded PDF page labels, "header" = numbers printed on the page,
+#        "pdf" = the book prints none, so cite the PDF page,
+#        "spread" = each PDF page scans two facing pages; first_page is the left-hand
+#        page of PDF page 1.
+# ocr:   for finding page numbers: "missing" = Tesseract only on pages without a text
+#        layer, "all" = ignore the text layer.
+# text:  where page text comes from: "gemini" (default) = Gemini's transcription of the
+#        page image (scripts/gemini_ocr.py; keeps macrons and Greek, which the books'
+#        old OCR layers lose), "layer" = the PDF's own text (born-digital books).
 BOOKS = [
     dict(id="adkins-handbook", match="Handbook to Life", pages="labels", ocr="missing",
          author="Lesley Adkins and Roy A. Adkins", title="Handbook to Life in Ancient Rome (Updated Edition)",
@@ -74,6 +81,25 @@ BOOKS = [
     dict(id="ward-heichelheim", match="Heichelheim", pages="labels", ocr="missing",
          author="Allen M. Ward, Fritz M. Heichelheim and Cedric A. Yeo", title="A History of the Roman People (6th Edition)",
          cite="Ward, Heichelheim & Yeo, A History of the Roman People"),
+    # Language
+    dict(id="allen-greenough", match="Allen and Greenough", pages="header", ocr="missing",
+         author="J. H. Allen and J. B. Greenough", title="New Latin Grammar for Schools and Colleges",
+         cite="Allen & Greenough, New Latin Grammar"),
+    dict(id="ehrlich-amo-amas-amat", match="Amo Amas Amat", pages="labels", ocr="missing",
+         author="Eugene Ehrlich", title="Amo, Amas, Amat and More",
+         cite="Ehrlich, Amo, Amas, Amat and More"),
+    dict(id="lodge-vocabulary", match="Vocabulary of High School Latin", pages="header", ocr="missing",
+         author="Gonzalez Lodge", title="The Vocabulary of High School Latin",
+         cite="Lodge, The Vocabulary of High School Latin"),
+    dict(id="brunel-vocabulary", match="Brunel", pages="pdf", ocr="missing",
+         author="Brunel", title="Basic Latin Vocabulary",
+         cite="Brunel, Basic Latin Vocabulary"),
+    dict(id="schaeffer-derivatives", match="Schaeffer", pages="spread", first_page=6, ocr="missing",
+         author="Schaeffer", title="Latin-English Derivative Dictionary",
+         cite="Schaeffer, Latin-English Derivative Dictionary"),
+    dict(id="greenwald-derivatives", match="Greenwald", pages="labels", ocr="missing", text="layer",
+         author="Greenwald", title="Latin Derivatives Packet (Revised)",
+         cite="Greenwald, Latin Derivatives Packet"),
 ]
 
 TOP_ZONE, BOTTOM_ZONE = 0.11, 0.90  # fraction of page height treated as header / footer
@@ -88,7 +114,7 @@ SPACED_DIGITS = re.compile(r"(?<=\d) (?=\d)")
 ROMAN = re.compile(r"^\W*[ivxlcdm]{1,7}\W*$", re.I)
 LEADING_NUM = re.compile(r"^\W*(\d{1,4})\b")
 TRAILING_NUM = re.compile(r"\b(\d{1,4})\W*$")
-WORDLIKE = re.compile(r"^[(\[\"'‘“]*([A-Za-z][a-z'’]*(-[A-Za-z][a-z'’]*)*|\d[\d,.–-]*)[)\]\"'’”.,;:!?]*$")
+WORDLIKE = re.compile(r"^[(\[\"'‘“-]*([^\W\d_][^\W\d_'’]*(-[^\W\d_][^\W\d_'’]*)*|\d[\d,.–-]*)[)\]\"'’”.,;:!?]*$")  # any letters, so macrons count
 
 
 def clean_line(s):
@@ -213,9 +239,17 @@ def header_page_numbers(cands, n):
             else:
                 # A full-length number that disagrees is a real break in the sequence
                 # (a duplicated scan page), not a dropped digit.
+                # Only when the pages after it continue the new numbering: a stray number
+                # (a section number, or "888" misread for 388) is not a break.
                 full = [c for c in cands[i] if len(str(c)) == len(str(i + best))]
-                if len(full) == 1:
+                if len(full) == 1 and sum(supports(j, full[0] - i) for j in range(i + 1, i + 5)) >= 2:
                     anchors[i] = full[0] - i
+    idx = sorted(anchors)
+    # A lone anchor whose offset disagrees with the matching anchors on both sides is a misread.
+    misread = [cur for prev, cur, nxt in zip(idx, idx[1:], idx[2:])
+               if anchors[prev] == anchors[nxt] != anchors[cur] and nxt - prev <= 4]
+    for i in misread:
+        del anchors[i]
     idx = sorted(anchors)
     pages, method = [None] * n, ["none"] * n
     for i in range(n):
@@ -243,9 +277,15 @@ def label_page_numbers(labels):
     return out
 
 
+# Digits old OCR layers confuse: Allen & Greenough's reads "388" as "888" for whole runs of pages.
+CONFUSED_DIGITS = str.maketrans("8", "3")
+
+
 def number_matches(page_num, printed):
-    """True when a printed number is this page's, allowing OCR-dropped leading digits."""
-    return page_num.isdigit() and page_num.endswith(str(printed))
+    """True when a printed number is this page's, allowing OCR-dropped leading digits
+    and a 3 misread as 8."""
+    return page_num.isdigit() and (page_num.endswith(str(printed)) or
+                                   page_num.translate(CONFUSED_DIGITS).endswith(str(printed).translate(CONFUSED_DIGITS)))
 
 
 def join_lines(lines):
@@ -307,6 +347,25 @@ def find_pdf(match):
     return hits[0]
 
 
+GEMINI_DIR = OUT / "gemini-ocr"
+
+
+# *word* or _word_ that Gemini used for italics. The span must hug its text, so a lone
+# asterisk (a footnote mark, a reconstructed form like *gnōtos) is left alone.
+MD_ITALIC = re.compile(r"(?<!\w)(?:\*(\S(?:[^*\n]*?\S)?)\*|_(\S(?:[^_\n]*?\S)?)_)(?!\w)")
+
+
+def gemini_text(source_id, pdf_page):
+    """Gemini's transcription of a page (see gemini_ocr.py), or None if it hasn't run."""
+    path = GEMINI_DIR / source_id / f"{pdf_page}.txt"
+    if not path.exists():
+        return None
+    text = unicodedata.normalize("NFC", path.read_text())
+    text = re.sub(r"^\s*#+\s*", "", text, flags=re.M).replace("**", "")  # stray markdown
+    text = MD_ITALIC.sub(r"\1\2", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
 def process_book(book):
     pdf = find_pdf(book["match"])
     doc = fitz.open(pdf)
@@ -327,6 +386,11 @@ def process_book(book):
     if book["pages"] == "labels":
         pages = label_page_numbers([doc[i].get_label() or None for i in range(n)])
         method = ["label" if p else "none" for p in pages]
+    elif book["pages"] == "pdf":
+        pages, method = [str(i + 1) for i in range(n)], ["pdf"] * n
+    elif book["pages"] == "spread":
+        left = [book["first_page"] + 2 * i for i in range(n)]
+        pages, method = [f"{p}–{p + 1}" for p in left], ["spread"] * n
     else:
         pages, method = header_page_numbers(cands, n)
 
@@ -339,18 +403,22 @@ def process_book(book):
 
     records = []
     for i in range(n):
-        text = render_text(raw[i], pages[i], running_heads)
+        text, source = render_text(raw[i], pages[i], running_heads), "tesseract" if ocr_used[i] else "layer"
+        if book.get("text", "gemini") == "gemini":
+            transcribed = gemini_text(book["id"], i + 1)
+            if transcribed is not None:
+                text, source = transcribed, "gemini"
         records.append({
             "source_id": book["id"], "author": book["author"], "title": book["title"], "cite": book["cite"],
             "pdf_file": pdf.name, "pdf_page": i + 1, "page": pages[i], "page_method": method[i],
-            "ocr": ocr_used[i], "quality": quality(text), "text": text,
+            "ocr": source != "layer", "text_source": source, "quality": quality(text), "text": text,
         })
     return book, records, {"checked": checked, "agreed": agreed, "running_heads": len(running_heads)}
 
 
 def page_ref(r):
     if r["page"]:
-        return f"p. {r['page']}"
+        return f"{'pp' if '–' in r['page'] else 'p'}. {r['page']}"
     return f"unnumbered, pdf page {r['pdf_page']}"
 
 

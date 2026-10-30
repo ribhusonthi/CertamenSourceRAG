@@ -33,7 +33,8 @@ CACHE_DB = INDEX_DB.parent / "embed-cache.db"
 TARGET_WORDS, MAX_WORDS, MIN_WORDS = 250, 400, 40
 # Dictionary pages hold many short entries; small chunks keep one entry from being
 # drowned out by its neighbours in the embedding.
-DICTIONARIES = {"grimal", "march", "tripp"}
+DICTIONARIES = {"grimal", "march", "tripp", "ehrlich-amo-amas-amat", "lodge-vocabulary",
+                "brunel-vocabulary", "schaeffer-derivatives", "greenwald-derivatives"}
 DICT_TARGET_WORDS = 100
 MIN_QUALITY = 0.6     # pages below this are OCR junk, plates, or index pages
 BATCH = 50
@@ -73,12 +74,29 @@ def chunk_page(text, target=TARGET_WORDS):
     return chunks
 
 
+REF_LINE = re.compile(r"\d+[a-z]?(\s*[–\-]\s*\d+)?[a-z]?\.?$")
+NUMBER = re.compile(r"^\W*\d[\d,–\-]*\W*$")
+
+
+def is_index_page(text):
+    """Contents pages, back-of-book indexes and reference lists: most lines end in page
+    numbers, or most tokens are numbers. Clean OCR made them searchable, and their
+    lists of rare names would otherwise outrank the passages they point to."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    tokens = text.split()
+    if not tokens:
+        return False
+    ref_lines = sum(1 for line in lines if REF_LINE.search(line)) / len(lines)
+    numbers = sum(1 for t in tokens if NUMBER.match(t)) / len(tokens)
+    return (len(lines) >= 15 and ref_lines >= 0.5) or numbers >= 0.45
+
+
 def load_chunks():
     chunks = []
     for f in sorted(PAGES.glob("*.jsonl")):
         for line in open(f):
             r = json.loads(line)
-            if not r["text"] or (r["quality"] or 0) < MIN_QUALITY:
+            if not r["text"] or (r["quality"] or 0) < MIN_QUALITY or is_index_page(r["text"]):
                 continue
             dictionary = r["source_id"] in DICTIONARIES
             for text in chunk_page(r["text"], DICT_TARGET_WORDS if dictionary else TARGET_WORDS):
