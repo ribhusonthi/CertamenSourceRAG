@@ -20,6 +20,12 @@ GCP_LOCATION = os.environ.get("VERTEX_LOCATION", "global")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "gemini-embedding-001")
 EMBED_DIM = 768
 CHAT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+# Low thinking writes answers as well as the default in tests and 2-5x faster
+# (the default spent up to 4,500 tokens and 28s thinking on one tossup).
+ANSWER_THINKING = os.environ.get("ANSWER_THINKING", "low")
+# Turning a question into search phrases needs no reasoning; Flash-Lite does it
+# as well as CHAT_MODEL in about a quarter of the time.
+REWRITE_MODEL = os.environ.get("REWRITE_MODEL", "gemini-3.5-flash-lite")
 
 
 # Which books to trust first. Primary sourcebooks are checked before secondary

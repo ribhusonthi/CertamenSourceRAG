@@ -21,7 +21,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rag_config import (  # noqa: E402
-    CHAT_MODEL, EMBED_DIM, EMBED_MODEL, INDEX_DB, TIER_NAMES, TIER_WEIGHTS, genai_client, retry, source_tier)
+    ANSWER_THINKING, CHAT_MODEL, EMBED_DIM, EMBED_MODEL, INDEX_DB, REWRITE_MODEL, TIER_NAMES, TIER_WEIGHTS,
+    genai_client, retry, source_tier)
 
 CANDIDATES = 40   # hits taken from each of keyword and vector search
 TOP_K = 15        # passages given to the model
@@ -334,6 +335,7 @@ class Chat:
             model=CHAT_MODEL, contents=self.contents(message, passages),
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM + CITED_FORMAT, temperature=0.2,
+                thinking_config=types.ThinkingConfig(thinking_level=ANSWER_THINKING),
                 response_mime_type="application/json", response_schema=CITED_SCHEMA,
                 http_options=types.HttpOptions(timeout=ANSWER_TIMEOUT_MS))))
         # Number citations in order of first use; the same sentence cited twice keeps its number.
@@ -371,8 +373,8 @@ class Chat:
         convo = "\n".join(f"User: {u}\nAssistant: {a[:600]}" for u, a in self.history[-3:]) or "(none)"
         try:
             res = self.index.client.models.generate_content(
-                model=CHAT_MODEL, contents=QUERIES.format(history=convo, message=message),
-                config=types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_level="low"), temperature=0,
+                model=REWRITE_MODEL, contents=QUERIES.format(history=convo, message=message),
+                config=types.GenerateContentConfig(temperature=0,
                                                    http_options=types.HttpOptions(timeout=QUICK_TIMEOUT_MS)))
         except Exception as e:  # the rewrite only improves recall; search with the question as asked
             print(f"query rewrite failed, using the question as is: {e}", file=sys.stderr, flush=True)
@@ -390,7 +392,8 @@ class Chat:
         answer = ""
         for part in self.index.client.models.generate_content_stream(
                 model=CHAT_MODEL, contents=self.contents(message, passages),
-                config=types.GenerateContentConfig(system_instruction=SYSTEM + TEXT_FORMAT, temperature=0.2)):
+                config=types.GenerateContentConfig(system_instruction=SYSTEM + TEXT_FORMAT, temperature=0.2,
+                                                   thinking_config=types.ThinkingConfig(thinking_level=ANSWER_THINKING))):
             if part.text:
                 answer += part.text
                 print(part.text, end="", flush=True, file=out)
