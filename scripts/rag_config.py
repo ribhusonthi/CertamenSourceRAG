@@ -43,6 +43,13 @@ SOURCE_TIERS = {
     "ward-heichelheim": PRIMARY,
     "matyszak-republic": SECONDARY,
     "scarre-emperors": SECONDARY,
+    # Livy (Bell's translation): Book I alongside the history textbooks, Books II-V
+    # alongside the chronicles.
+    "livy-1": PRIMARY,
+    "livy-2": SECONDARY,
+    "livy-3": SECONDARY,
+    "livy-4": SECONDARY,
+    "livy-5": SECONDARY,
     # Literature
     "conte": PRIMARY,
     "hadas": SECONDARY,

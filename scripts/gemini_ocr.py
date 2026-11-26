@@ -25,7 +25,7 @@ from pathlib import Path
 import fitz
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from extract_pages import BOOKS, GEMINI_DIR, find_pdf  # noqa: E402
+from extract_pages import BOOKS, GEMINI_DIR, find_pdf, page_indexes  # noqa: E402
 from rag_config import CHAT_MODEL, genai_client  # noqa: E402
 
 DPI = 200
@@ -77,7 +77,7 @@ def ocr_book(book_id):
 
     with ThreadPoolExecutor(THREADS_PER_BOOK) as pool:
         futures = []
-        for i in range(doc.page_count):
+        for i in page_indexes(book, doc):
             path = out / f"{i + 1}.txt"
             if path.exists():
                 stats["skipped"] += 1
@@ -119,9 +119,9 @@ def check(book_ids):
         doc = fitz.open(find_pdf(book["match"]))
         out = GEMINI_DIR / book_id
         failed = json.loads((out / "failed.json").read_text()) if (out / "failed.json").exists() else {}
-        missing = [i + 1 for i in range(doc.page_count) if not (out / f"{i + 1}.txt").exists()]
+        missing = [i + 1 for i in page_indexes(book, doc) if not (out / f"{i + 1}.txt").exists()]
         short = []
-        for i in range(doc.page_count):
+        for i in page_indexes(book, doc):
             path = out / f"{i + 1}.txt"
             if not path.exists():
                 continue
@@ -129,7 +129,7 @@ def check(book_ids):
             new = words(path.read_text())
             if len(old) >= 60 and len(new) < 0.6 * len(old):
                 short.append((i + 1, len(new), len(old)))
-        print(f"{book_id}: {doc.page_count} pages, missing {len(missing)}, failed {len(failed)}, much shorter than old text {len(short)}")
+        print(f"{book_id}: {len(page_indexes(book, doc))} pages, missing {len(missing)}, failed {len(failed)}, much shorter than old text {len(short)}")
         for page, reason in list(failed.items())[:10]:
             print(f"    failed pdf {page}: {reason}")
         for page, n_new, n_old in short[:10]:

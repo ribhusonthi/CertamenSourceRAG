@@ -38,6 +38,8 @@ OUT = ROOT / "extracted"
 #        page of PDF page 1.
 # ocr:   for finding page numbers: "missing" = Tesseract only on pages without a text
 #        layer, "all" = ignore the text layer.
+# pdf_pages: (first, last) PDF pages of this source when one PDF holds several (the
+#        Livy volume binds Books I-V, each its own source with its own pagination).
 # text:  where page text comes from: "gemini" (default) = Gemini's transcription of the
 #        page image (scripts/gemini_ocr.py; keeps macrons and Greek, which the books'
 #        old OCR layers lose), "layer" = the PDF's own text (born-digital books).
@@ -78,6 +80,12 @@ BOOKS = [
     dict(id="tripp", match="Tripp", pages="labels", ocr="missing",
          author="Edward Tripp", title="The Meridian Handbook of Classical Mythology",
          cite="Tripp, Handbook of Classical Mythology"),
+    *[dict(id=f"livy-{n}", match="Livy - History of Rome", pages="header", ocr="missing", pdf_pages=span,
+           author=f"Livy (trans. {translator})", title=f"Livy's History of Rome, Book {roman} (Bell's Classical Translations)",
+           cite=f"Livy, History of Rome Book {roman}")
+      for n, roman, span, translator in [(1, "I", (11, 124), "J. H. Freese"), (2, "II", (125, 240), "J. H. Freese"),
+                                         (3, "III", (241, 366), "J. H. Freese"), (4, "IV", (367, 466), "J. H. Freese"),
+                                         (5, "V", (467, 555), "E. S. Weymouth")]],
     dict(id="ward-heichelheim", match="Heichelheim", pages="labels", ocr="missing",
          author="Allen M. Ward, Fritz M. Heichelheim and Cedric A. Yeo", title="A History of the Roman People (6th Edition)",
          cite="Ward, Heichelheim & Yeo, A History of the Roman People"),
@@ -366,13 +374,20 @@ def gemini_text(source_id, pdf_page):
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def page_indexes(book, doc):
+    """The 0-based PDF page indexes that belong to this source."""
+    first, last = book.get("pdf_pages", (1, doc.page_count))
+    return list(range(first - 1, min(last, doc.page_count)))
+
+
 def process_book(book):
     pdf = find_pdf(book["match"])
     doc = fitz.open(pdf)
-    n = doc.page_count
+    idx = page_indexes(book, doc)
+    n = len(idx)
     raw, ocr_used = [], []
     for i in range(n):
-        blocks, used = read_page(doc[i], book["ocr"], OUT / "ocr-cache" / book["id"])
+        blocks, used = read_page(doc[idx[i]], book["ocr"], OUT / "ocr-cache" / book["id"])
         raw.append(blocks)
         ocr_used.append(used)
 
@@ -384,10 +399,10 @@ def process_book(book):
     cands = {i: [c for c in map(candidate_number, zl) if c is not None] for i, zl in enumerate(zone_lines)}
 
     if book["pages"] == "labels":
-        pages = label_page_numbers([doc[i].get_label() or None for i in range(n)])
+        pages = label_page_numbers([doc[idx[i]].get_label() or None for i in range(n)])
         method = ["label" if p else "none" for p in pages]
     elif book["pages"] == "pdf":
-        pages, method = [str(i + 1) for i in range(n)], ["pdf"] * n
+        pages, method = [str(idx[i] + 1) for i in range(n)], ["pdf"] * n
     elif book["pages"] == "spread":
         left = [book["first_page"] + 2 * i for i in range(n)]
         pages, method = [f"{p}–{p + 1}" for p in left], ["spread"] * n
@@ -405,12 +420,12 @@ def process_book(book):
     for i in range(n):
         text, source = render_text(raw[i], pages[i], running_heads), "tesseract" if ocr_used[i] else "layer"
         if book.get("text", "gemini") == "gemini":
-            transcribed = gemini_text(book["id"], i + 1)
+            transcribed = gemini_text(book["id"], idx[i] + 1)
             if transcribed is not None:
                 text, source = transcribed, "gemini"
         records.append({
             "source_id": book["id"], "author": book["author"], "title": book["title"], "cite": book["cite"],
-            "pdf_file": pdf.name, "pdf_page": i + 1, "page": pages[i], "page_method": method[i],
+            "pdf_file": pdf.name, "pdf_page": idx[i] + 1, "page": pages[i], "page_method": method[i],
             "ocr": source != "layer", "text_source": source, "quality": quality(text), "text": text,
         })
     return book, records, {"checked": checked, "agreed": agreed, "running_heads": len(running_heads)}
